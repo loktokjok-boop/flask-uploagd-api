@@ -5,7 +5,7 @@ import os, json, uuid
 app = Flask(__name__)
 
 # Папка для хранения JSON (Render: используем /tmp)
-SAVE_FOLDER = "/tmp/received_json"
+SAVE_FOLDER = "received_json"
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
 # Список допустимых QR‑кодов
