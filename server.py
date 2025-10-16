@@ -4,8 +4,8 @@ import os, json, uuid
 
 app = Flask(__name__)
 
-# Папка для хранения JSON
-SAVE_FOLDER = "received_json"
+# Папка для хранения JSON (Render: используем /tmp)
+SAVE_FOLDER = "/tmp/received_json"
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
 # Список допустимых QR‑кодов
@@ -22,12 +22,13 @@ def save_record(rec):
     )
     with open(fname, "w", encoding="utf-8") as f:
         json.dump(rec, f, ensure_ascii=False, indent=2)
+    print(f"Saved JSON file: {fname}")  # Проверка в логах
     return fname
 
 @app.route("/upload", methods=["GET", "POST"])
 def upload():
-    # Определяем код из POST JSON или GET параметра
     if request.method == "POST":
+        # POST с JSON (Webhook)
         if not request.is_json:
             return jsonify({"status": "error", "msg": "expected JSON"}), 400
         payload = request.get_json()
@@ -36,7 +37,7 @@ def upload():
         device = payload.get("device", "unknown")
         time_sent = payload.get("time") or datetime.now().isoformat()
     else:
-        # GET-запрос через браузер / QR
+        # GET (QR-код в браузере)
         code = request.args.get("id", "").strip()
         user_type = "unknown"
         device = "unknown"
@@ -66,22 +67,21 @@ def upload():
         msg = "Код не найден ❌"
         allowed = False
 
-    # GET-запрос — возвращаем HTML для браузера
     if request.method == "GET":
+        # Возврат HTML для QR
         return f"""
         <h2>Результат проверки QR</h2>
         <p>Код: {code}</p>
         <p>Статус: {msg}</p>
         """, 200
 
-    # POST — возвращаем JSON
+    # POST — JSON
     return jsonify({
         "status": "ok" if name else "error",
         "allowed": allowed,
         "msg": msg,
         "name": name
     }), 200
-
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
