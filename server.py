@@ -81,15 +81,10 @@ def upload():
     return jsonify({"status": "error", "msg": "Invalid method"}), 405
 
 
+import os
 if __name__ == '__main__':
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)
     print(f"Server running on: http://{local_ip}:5000/upload")
     app.run(host='0.0.0.0', port=5000)
 
-
-import os
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
