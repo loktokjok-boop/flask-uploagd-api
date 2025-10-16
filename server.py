@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from datetime import datetime, time
-import os, json, uuid, socket
+import os, json, uuid
 
 app = Flask(__name__)
 
@@ -11,6 +11,7 @@ os.makedirs(SAVE_FOLDER, exist_ok=True)
 # Список допустимых QR‑кодов
 VALID = {
     "ABC123": {"type": "user1"},
+    "XYZ789": {"type": "user2"}
 }
 
 # Функция для сохранения данных в отдельный файл
@@ -25,66 +26,64 @@ def save_record(rec):
 
 @app.route("/upload", methods=["GET", "POST"])
 def upload():
+    # Определяем код из POST JSON или GET параметра
     if request.method == "POST":
         if not request.is_json:
-            return jsonify({"status": "error", "msg": "expected json"}), 400
-
+            return jsonify({"status": "error", "msg": "expected JSON"}), 400
         payload = request.get_json()
-        # print("Получен payload:", payload)
-
         code = (payload.get("id") or "").strip()
         user_type = payload.get("type", "unknown")
         device = payload.get("device", "unknown")
         time_sent = payload.get("time") or datetime.now().isoformat()
+    else:
+        # GET-запрос через браузер / QR
+        code = request.args.get("id", "").strip()
+        user_type = "unknown"
+        device = "unknown"
+        time_sent = datetime.now().isoformat()
 
-        now = datetime.now().time()
-        limit_time = time(8, 20)
-        on_time = now <= limit_time
+    now = datetime.now().time()
+    limit_time = time(8, 20)
+    on_time = now <= limit_time
 
-        record = {
-            "code": code,
-            "user_type": user_type,
-            "device": device,
-            "time_sent": time_sent,
-            "received_at": datetime.now().isoformat(),
-            "on_time": on_time
-        }
+    record = {
+        "code": code,
+        "user_type": user_type,
+        "device": device,
+        "time_sent": time_sent,
+        "received_at": datetime.now().isoformat(),
+        "on_time": on_time
+    }
+    save_record(record)
 
-        save_record(record)
+    # Проверка QR-кода
+    if code in VALID:
+        name = VALID[code]["type"]
+        msg = "Пройдено вовремя ✅" if on_time else "Опоздание ❌ (после 8:20)"
+        allowed = on_time
+    else:
+        name = None
+        msg = "Код не найден ❌"
+        allowed = False
 
-        # ---- Блок с проверкой ----
-        if code in VALID:
-            name = VALID[code]["type"]
-            if on_time:
-                result = {
-                    "status": "ok",
-                    "allowed": True,
-                    "msg": "Пройдено вовремя ✅",
-                    "name": name
-                }
-            else:
-                result = {
-                    "status": "ok",
-                    "allowed": False,
-                    "msg": "Опоздание ❌ (после 8:20)",
-                    "name": name
-                }
-        else:
-            result = {
-                "status": "error",
-                "allowed": False,
-                "msg": "Код не найден ❌"
-            }
+    # GET-запрос — возвращаем HTML для браузера
+    if request.method == "GET":
+        return f"""
+        <h2>Результат проверки QR</h2>
+        <p>Код: {code}</p>
+        <p>Статус: {msg}</p>
+        """, 200
 
-        return jsonify(result), 200
-
-    return jsonify({"status": "error", "msg": "Invalid method"}), 405
+    # POST — возвращаем JSON
+    return jsonify({
+        "status": "ok" if name else "error",
+        "allowed": allowed,
+        "msg": msg,
+        "name": name
+    }), 200
 
 
-import os
 if __name__ == '__main__':
-    hostname = socket.gethostname()
-    local_ip = socket.gethostbyname(hostname)
-    print(f"Server running on: http://{local_ip}:5000/upload")
-    app.run(host='0.0.0.0', port=5000)
-
+    port = int(os.environ.get("PORT", 5000))
+    print(f"Server running on http://0.0.0.0:{port}/upload")
+    app.run(host='0.0.0.0', port=port, debug=True)
