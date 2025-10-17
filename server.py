@@ -5,15 +5,17 @@ import os, json, uuid
 
 app = Flask(__name__)
 
+# Папка для сохранения сканов
 SAVE_FOLDER = "received_json"
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
+# Валидные коды
 VALID = {
     "ABC123": {"type": "user1"},
     "XYZ789": {"type": "user2"}
 }
 
-# Сохранение JSON
+# --- Сохранение записи ---
 def save_record(rec):
     fname = f"scan_{datetime.now(ZoneInfo('Asia/Yerevan')).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.json"
     path = os.path.join(SAVE_FOLDER, fname)
@@ -22,7 +24,7 @@ def save_record(rec):
     print(f"Saved JSON file: {path}")
     return fname
 
-# Поиск последнего скана по коду
+# --- Поиск последнего скана по коду ---
 def get_last_record_by_code(code):
     files = sorted(os.listdir(SAVE_FOLDER), reverse=True)
     for file in files:
@@ -34,7 +36,7 @@ def get_last_record_by_code(code):
                     return data, file
     return None, None
 
-# Основной маршрут
+# --- Основной маршрут ---
 @app.route("/upload", methods=["GET", "POST"])
 def upload():
     erevan_now = datetime.now(ZoneInfo("Asia/Yerevan"))
@@ -46,9 +48,10 @@ def upload():
         payload = request.get_json()
         print("Received JSON:", payload)
 
-        # --- Исправляем данные AllCodeRelay ---
+        # --- Парсим данные AllCodeRelay ---
         raw_code = payload.get("code", "{}")
         try:
+            # если пришла строка вида '{"id":"ABC123","type":"user1"}'
             code_data = json.loads(raw_code)
         except json.JSONDecodeError:
             code_data = {}
@@ -72,11 +75,13 @@ def upload():
             "on_time": on_time
         }
 
+        # --- Сохраняем JSON на диск ---
         filename = save_record(record)
 
         msg = "Пройдено вовремя ✅" if on_time else "Опоздание ❌"
         allowed = on_time if code in VALID else False
 
+        # --- Возврат JSON ---
         return jsonify({
             "status": "ok" if code in VALID else "error",
             "allowed": allowed,
@@ -103,17 +108,18 @@ def upload():
         """
         return render_template_string(html_template, record=record, filename=filename)
 
-# Отдача файлов
+# --- Отдача файлов ---
 @app.route("/files/<filename>")
 def get_file(filename):
     return open(os.path.join(SAVE_FOLDER, filename), "rb").read()
 
-# Список всех файлов
+# --- Список всех файлов ---
 @app.route("/files", methods=["GET"])
 def list_files():
     files = os.listdir(SAVE_FOLDER)
     return jsonify({"files": files})
 
+# --- Запуск сервера ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
