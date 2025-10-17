@@ -1,11 +1,10 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import os, json, uuid
 
 app = Flask(__name__)
 
-# === Настройки ===
 SAVE_FOLDER = "received_json"
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
@@ -14,7 +13,7 @@ VALID = {
     "XYZ789": {"type": "user2"}
 }
 
-# === Сохранение файла ===
+# Сохранение JSON
 def save_record(rec):
     fname = f"scan_{datetime.now(ZoneInfo('Asia/Yerevan')).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.json"
     path = os.path.join(SAVE_FOLDER, fname)
@@ -23,7 +22,7 @@ def save_record(rec):
     print(f"Saved JSON file: {path}")
     return fname
 
-# === Поиск последнего скана по коду ===
+# Поиск последнего скана по коду
 def get_last_record_by_code(code):
     files = sorted(os.listdir(SAVE_FOLDER), reverse=True)
     for file in files:
@@ -35,7 +34,7 @@ def get_last_record_by_code(code):
                     return data, file
     return None, None
 
-# === Основной маршрут ===
+# Основной маршрут
 @app.route("/upload", methods=["GET", "POST"])
 def upload():
     erevan_now = datetime.now(ZoneInfo("Asia/Yerevan"))
@@ -47,8 +46,15 @@ def upload():
         payload = request.get_json()
         print("Received JSON:", payload)
 
-        code = (payload.get("id") or "").strip()
-        user_type = payload.get("type", "unknown")
+        # --- Исправляем данные AllCodeRelay ---
+        raw_code = payload.get("code", "{}")
+        try:
+            code_data = json.loads(raw_code)
+        except json.JSONDecodeError:
+            code_data = {}
+
+        code = code_data.get("id") or ""
+        user_type = code_data.get("type") or "unknown"
         device = payload.get("device", "unknown")
         time_sent = payload.get("time") or erevan_now.isoformat()
 
@@ -75,40 +81,39 @@ def upload():
             "status": "ok" if code in VALID else "error",
             "allowed": allowed,
             "msg": msg,
-            "name": user_type if code in VALID else None,
+            "record": record,
             "file": f"/files/{filename}"
         }), 200
 
-    else:  # GET-запрос
+    else:  # GET
         code = (request.args.get("id") or "").strip()
         record, filename = get_last_record_by_code(code)
-
         if not record:
             return f"<p>Нет записей для кода {code}</p>", 404
 
-        return f"""
+        html_template = """
         <h2>Результат проверки QR</h2>
-        <p>Код: {record['code']}</p>
-        <p>Пользователь: {record['user_type']}</p>
-        <p>Устройство: {record['device']}</p>
-        <p>Время отправки: {record['time_sent']}</p>
-        <p>Время получения (Ереван): {record['received_at']}</p>
-        <p>Статус: {"Пройдено вовремя ✅" if record['on_time'] else "Опоздание ❌"}</p>
-        <p><a href="/files/{filename}" target="_blank">📄 Скачать JSON</a></p>
-        """, 200
+        <p>Код: {{ record['code'] }}</p>
+        <p>Пользователь: {{ record['user_type'] }}</p>
+        <p>Устройство: {{ record['device'] }}</p>
+        <p>Время отправки: {{ record['time_sent'] }}</p>
+        <p>Время получения (Ереван): {{ record['received_at'] }}</p>
+        <p>Статус: {% if record['on_time'] %}Пройдено вовремя ✅{% else %}Опоздание ❌{% endif %}</p>
+        <p><a href="/files/{{ filename }}" target="_blank">📄 Скачать JSON</a></p>
+        """
+        return render_template_string(html_template, record=record, filename=filename)
 
-# === Отдача файлов ===
+# Отдача файлов
 @app.route("/files/<filename>")
 def get_file(filename):
-    return send_from_directory(SAVE_FOLDER, filename)
+    return open(os.path.join(SAVE_FOLDER, filename), "rb").read()
 
-# === Список всех файлов ===
+# Список всех файлов
 @app.route("/files", methods=["GET"])
 def list_files():
     files = os.listdir(SAVE_FOLDER)
     return jsonify({"files": files})
 
-# === Запуск ===
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
