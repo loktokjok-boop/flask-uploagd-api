@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_from_directory
 from datetime import datetime, time
+from zoneinfo import ZoneInfo
 import os, json, uuid
 
 app = Flask(__name__)
@@ -16,7 +17,7 @@ VALID = {
 
 # === Сохранение файла ===
 def save_record(rec):
-    fname = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.json"
+    fname = f"scan_{datetime.now(ZoneInfo('Asia/Yerevan')).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.json"
     path = os.path.join(SAVE_FOLDER, fname)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(rec, f, ensure_ascii=False, indent=2)
@@ -27,6 +28,9 @@ def save_record(rec):
 # === Основной маршрут ===
 @app.route("/upload", methods=["GET", "POST"])
 def upload():
+    # Текущее время Еревана
+    erevan_now = datetime.now(ZoneInfo("Asia/Yerevan"))
+
     # --- Обработка POST (через приложение или API) ---
     if request.method == "POST":
         if not request.is_json:
@@ -38,7 +42,7 @@ def upload():
         code = (payload.get("id") or "").strip()
         user_type = payload.get("type", "unknown")
         device = payload.get("device", "unknown")
-        time_sent = payload.get("time") or datetime.now().isoformat()
+        time_sent = payload.get("time") or erevan_now.isoformat()
 
         # Автоматически определяем тип пользователя, если не передан
         if user_type == "unknown" and code in VALID:
@@ -49,11 +53,10 @@ def upload():
         code = (request.args.get("id") or "").strip()
         user_type = VALID[code]["type"] if code in VALID else "unknown"
         device = "qr"
-        time_sent = datetime.now().isoformat()
+        time_sent = erevan_now.isoformat()
 
     # --- Проверка времени ---
-    now = datetime.now().time()
-    on_time = now <= time(8, 20)
+    on_time = erevan_now.time() <= time(8, 20)
 
     # --- Формируем запись ---
     record = {
@@ -61,7 +64,7 @@ def upload():
         "user_type": user_type,
         "device": device,
         "time_sent": time_sent,
-        "received_at": datetime.now().isoformat(),
+        "received_at": erevan_now.isoformat(),
         "on_time": on_time
     }
 
@@ -82,9 +85,12 @@ def upload():
     if request.method == "GET":
         return f"""
         <h2>Результат проверки QR</h2>
-        <p>Код: {code or '—'}</p>
-        <p>Пользователь: {user_type}</p>
-        <p>Статус: {msg}</p>
+        <p>Код: {record['code'] or '—'}</p>
+        <p>Пользователь: {record['user_type']}</p>
+        <p>Устройство: {record['device']}</p>
+        <p>Время отправки: {record['time_sent']}</p>
+        <p>Время получения (Ереван): {record['received_at']}</p>
+        <p>Статус: {"Пройдено вовремя ✅" if record['on_time'] else "Опоздание ❌"}</p>
         <p><a href="/files/{filename}" target="_blank">📄 Скачать JSON</a></p>
         """, 200
 
