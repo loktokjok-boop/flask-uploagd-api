@@ -4,17 +4,17 @@ import os, json, uuid
 
 app = Flask(__name__)
 
-# Папка для хранения JSON-файлов
-SAVE_FOLDER = "received_json"
+# === Настройки ===
+SAVE_FOLDER = "received_json"   # Папка, куда сохраняются JSON
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
-# Список допустимых кодов и их типы
+# Список валидных кодов
 VALID = {
     "ABC123": {"type": "user1"},
     "XYZ789": {"type": "user2"}
 }
 
-# Функция для сохранения JSON-файла
+# === Сохранение файла ===
 def save_record(rec):
     fname = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.json"
     path = os.path.join(SAVE_FOLDER, fname)
@@ -23,37 +23,39 @@ def save_record(rec):
     print(f"Saved JSON file: {path}")
     return fname
 
-# Основной маршрут
+
+# === Основной маршрут ===
 @app.route("/upload", methods=["GET", "POST"])
 def upload():
+    # --- Обработка POST (через приложение или API) ---
     if request.method == "POST":
         if not request.is_json:
             return jsonify({"status": "error", "msg": "expected JSON"}), 400
 
         payload = request.get_json()
-        print("Received JSON:", payload)  # для логов
+        print("Received JSON:", payload)
 
         code = (payload.get("id") or "").strip()
         user_type = payload.get("type", "unknown")
         device = payload.get("device", "unknown")
         time_sent = payload.get("time") or datetime.now().isoformat()
 
-        # Автоопределение user_type по таблице VALID
+        # Автоматически определяем тип пользователя, если не передан
         if user_type == "unknown" and code in VALID:
             user_type = VALID[code]["type"]
 
+    # --- Обработка GET (например, при сканировании QR) ---
     else:
-        # Если пришёл GET-запрос (например, при открытии QR в браузере)
-        code = request.args.get("id", "").strip()
+        code = (request.args.get("id") or "").strip()
         user_type = VALID[code]["type"] if code in VALID else "unknown"
-        device = "browser"
+        device = "qr"
         time_sent = datetime.now().isoformat()
 
-    # Проверка на опоздание (до 08:20)
+    # --- Проверка времени ---
     now = datetime.now().time()
     on_time = now <= time(8, 20)
 
-    # Сохраняем запись
+    # --- Формируем запись ---
     record = {
         "code": code,
         "user_type": user_type,
@@ -62,9 +64,11 @@ def upload():
         "received_at": datetime.now().isoformat(),
         "on_time": on_time
     }
+
+    # --- Сохраняем ---
     filename = save_record(record)
 
-    # Формируем ответ
+    # --- Определяем статус ---
     if code in VALID:
         name = VALID[code]["type"]
         msg = "Пройдено вовремя ✅" if on_time else "Опоздание ❌"
@@ -74,15 +78,17 @@ def upload():
         msg = "Код не найден ❌"
         allowed = False
 
+    # --- Ответ для браузера (GET) ---
     if request.method == "GET":
         return f"""
         <h2>Результат проверки QR</h2>
-        <p>Код: {code}</p>
+        <p>Код: {code or '—'}</p>
         <p>Пользователь: {user_type}</p>
         <p>Статус: {msg}</p>
         <p><a href="/files/{filename}" target="_blank">📄 Скачать JSON</a></p>
         """, 200
 
+    # --- Ответ для API (POST) ---
     return jsonify({
         "status": "ok" if name else "error",
         "allowed": allowed,
@@ -91,17 +97,21 @@ def upload():
         "file": f"/files/{filename}"
     }), 200
 
-# Отдача сохранённых JSON-файлов
+
+# === Отдача сохранённых файлов ===
 @app.route("/files/<filename>")
 def get_file(filename):
     return send_from_directory(SAVE_FOLDER, filename)
 
-# Список всех JSON-файлов (удобно для проверки)
+
+# === Список всех файлов (для проверки) ===
 @app.route("/files", methods=["GET"])
 def list_files():
     files = os.listdir(SAVE_FOLDER)
     return jsonify({"files": files})
 
+
+# === Запуск ===
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
