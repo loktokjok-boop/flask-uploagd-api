@@ -68,7 +68,7 @@ def upload():
 
         record = {
             "code": code,
-            "user_type": user_type,
+            "user_type": type,
             "device": device,
             "time_sent": time_sent,
             "received_at": erevan_now.isoformat(),
