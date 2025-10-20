@@ -123,3 +123,21 @@ def list_files():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
+
+@app.route("/all_scans_view", methods=["GET"])
+def all_scans_view():
+    all_records = []
+    files = sorted(os.listdir(SAVE_FOLDER), reverse=True)
+    for file in files:
+        if file.endswith(".json"):
+            path = os.path.join(SAVE_FOLDER, file)
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                all_records.append(data)
+
+    html = "<h2>Все сканы</h2><table border='1'><tr><th>Код</th><th>Пользователь</th><th>Устройство</th><th>Время</th><th>Статус</th></tr>"
+    for r in all_records:
+        status = "✅" if r.get("on_time") else "❌"
+        html += f"<tr><td>{r.get('code')}</td><td>{r.get('user_type')}</td><td>{r.get('device')}</td><td>{r.get('received_at')}</td><td>{status}</td></tr>"
+    html += "</table>"
+    return html
