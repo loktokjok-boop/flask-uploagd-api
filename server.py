@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_from_directory
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import os, json, uuid
@@ -48,11 +48,10 @@ def upload():
         payload = request.get_json()
         print("Received JSON:", payload)
 
-        # --- Парсим данные AllCodeRelay ---
+        # --- Парсим данные ---
         raw_code = payload.get("code", "{}")
         try:
-            # если пришла строка вида '{"id":"ABC123","type":"user1"}'
-            code_data = json.loads(raw_code)
+            code_data = json.loads(raw_code) if isinstance(raw_code, str) else raw_code
         except json.JSONDecodeError:
             code_data = {}
 
@@ -61,27 +60,26 @@ def upload():
         device = payload.get("device", "unknown")
         time_sent = payload.get("time") or erevan_now.isoformat()
 
-        if user_type == "unknown" and code in VALID:
+        # Если код известен, подставляем пользователя из VALID
+        if code in VALID:
             user_type = VALID[code]["type"]
 
         on_time = erevan_now.time() <= time(8, 20)
 
         record = {
             "code": code,
-            "user_type": type,
+            "user_type": user_type,
             "device": device,
             "time_sent": time_sent,
             "received_at": erevan_now.isoformat(),
             "on_time": on_time
         }
 
-        # --- Сохраняем JSON на диск ---
         filename = save_record(record)
 
         msg = "Пройдено вовремя ✅" if on_time else "Опоздание ❌"
         allowed = on_time if code in VALID else False
 
-        # --- Возврат JSON ---
         return jsonify({
             "status": "ok" if code in VALID else "error",
             "allowed": allowed,
@@ -111,7 +109,7 @@ def upload():
 # --- Отдача файлов ---
 @app.route("/files/<filename>")
 def get_file(filename):
-    return open(os.path.join(SAVE_FOLDER, filename), "rb").read()
+    return send_from_directory(SAVE_FOLDER, filename, as_attachment=True)
 
 # --- Список всех файлов ---
 @app.route("/files", methods=["GET"])
@@ -119,11 +117,7 @@ def list_files():
     files = os.listdir(SAVE_FOLDER)
     return jsonify({"files": files})
 
-# --- Запуск сервера ---
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
-
+# --- Все сканы ---
 @app.route("/all_scans_view", methods=["GET"])
 def all_scans_view():
     all_records = []
@@ -141,3 +135,8 @@ def all_scans_view():
         html += f"<tr><td>{r.get('code')}</td><td>{r.get('user_type')}</td><td>{r.get('device')}</td><td>{r.get('received_at')}</td><td>{status}</td></tr>"
     html += "</table>"
     return html
+
+# --- Запуск сервера ---
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
