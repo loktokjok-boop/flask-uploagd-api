@@ -14,7 +14,9 @@ VALID = {
     "ABC1": {"type": "Էվն Իգազարյան"},
     "ABC2": {"type": "Նարեկ Թովմասյան"},
     "ABC3": {"type": "Արտյոմ Եղիազարյան"},
-    "ABC4 ": {"type": "Վահե Այվազյան"}
+    "ABC4 ": {"type": "Վահե Այվազյան"},
+    "ABC5 ": {"type": "Էրիկ Եղոյան"
+                      "}
 }
 
 # --- Сохранение записи ---
@@ -142,3 +144,4 @@ def all_scans_view():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
+
