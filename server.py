@@ -17,6 +17,7 @@ VALID = {
                       ""}
 }
 
+
 # --- SSE: очередь событий для подключённых клиентов ---
 _sse_listeners: list[queue.Queue] = []
 _sse_lock = threading.Lock()
@@ -236,17 +237,7 @@ function connect() {
   es.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.event !== 'new_scan') return;
-    const r = msg.record;
-    const onTime = r.on_time;
-    const tr = document.createElement('tr');
-    tr.className = 'new-row';
-    tr.innerHTML = `
-      <td>${r.code || '—'}</td>
-      <td>${r.user_type || '—'}</td>
-      <td>${r.device || '—'}</td>
-      <td>${r.received_at || '—'}</td>
-      <td class="${onTime ? 'ok' : 'bad'}">${onTime ? '✅ Вовремя' : '❌ Опоздание'}</td>`;
-    tbody.insertBefore(tr, tbody.firstChild);
+    location.reload();
   };
 
   es.onerror = () => {
