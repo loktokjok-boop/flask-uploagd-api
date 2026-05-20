@@ -1,15 +1,13 @@
-from flask import Flask, request, jsonify, render_template_string, send_from_directory
+from flask import Flask, request, jsonify, render_template_string, send_from_directory, Response
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-import os, json, uuid
+import os, json, uuid, queue, threading
 
 app = Flask(__name__)
 
-# Папка для сохранения сканов
 SAVE_FOLDER = "received_json"
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
-# Валидные коды
 VALID = {
     "ABC1": {"type": "Էվն Իգազարյան"},
     "ABC2": {"type": "Նարեկ Թովմասյան"},
@@ -19,16 +17,64 @@ VALID = {
                       ""}
 }
 
+# --- SSE: очередь событий для подключённых клиентов ---
+_sse_listeners: list[queue.Queue] = []
+_sse_lock = threading.Lock()
+
+
+def _broadcast(event_data: dict):
+    """Отправляем событие всем подключённым SSE-клиентам."""
+    payload = f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+    with _sse_lock:
+        dead = []
+        for q in _sse_listeners:
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                dead.append(q)
+        for q in dead:
+            _sse_listeners.remove(q)
+
+
+# --- SSE endpoint ---
+@app.route("/events")
+def sse_stream():
+    q: queue.Queue = queue.Queue(maxsize=20)
+    with _sse_lock:
+        _sse_listeners.append(q)
+
+    def generate():
+        # Первое сообщение — keepalive
+        yield ": keepalive\n\n"
+        try:
+            while True:
+                try:
+                    msg = q.get(timeout=30)
+                    yield msg
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        except GeneratorExit:
+            with _sse_lock:
+                try:
+                    _sse_listeners.remove(q)
+                except ValueError:
+                    pass
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 # --- Сохранение записи ---
 def save_record(rec):
     fname = f"scan_{datetime.now(ZoneInfo('Asia/Yerevan')).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.json"
     path = os.path.join(SAVE_FOLDER, fname)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(rec, f, ensure_ascii=False, indent=2)
-    print(f"Saved JSON file: {path}")
+    print(f"Saved: {path}")
     return fname
 
-# --- Поиск последнего скана по коду ---
+
+# --- Последний скан по коду ---
 def get_last_record_by_code(code):
     files = sorted(os.listdir(SAVE_FOLDER), reverse=True)
     for file in files:
@@ -39,6 +85,19 @@ def get_last_record_by_code(code):
                 if data.get("code") == code:
                     return data, file
     return None, None
+
+
+# --- Все сканы (список) ---
+def load_all_records():
+    all_records = []
+    files = sorted(os.listdir(SAVE_FOLDER), reverse=True)
+    for file in files:
+        if file.endswith(".json"):
+            path = os.path.join(SAVE_FOLDER, file)
+            with open(path, "r", encoding="utf-8") as f:
+                all_records.append(json.load(f))
+    return all_records
+
 
 # --- Основной маршрут ---
 @app.route("/upload", methods=["GET", "POST"])
@@ -52,7 +111,6 @@ def upload():
         payload = request.get_json()
         print("Received JSON:", payload)
 
-        # --- Парсим данные ---
         raw_code = payload.get("code", "{}")
         try:
             code_data = json.loads(raw_code) if isinstance(raw_code, str) else raw_code
@@ -64,7 +122,6 @@ def upload():
         device = payload.get("device", "unknown")
         time_sent = payload.get("time") or erevan_now.isoformat()
 
-        # Если код известен, подставляем пользователя из VALID
         if code in VALID:
             user_type = VALID[code]["type"]
 
@@ -76,10 +133,13 @@ def upload():
             "device": device,
             "time_sent": time_sent,
             "received_at": erevan_now.isoformat(),
-            "on_time": on_time
+            "on_time": on_time,
         }
 
         filename = save_record(record)
+
+        # 🔔 Уведомляем всех SSE-клиентов о новом скане
+        _broadcast({"event": "new_scan", "record": record, "file": filename})
 
         msg = "Пройдено вовремя ✅" if on_time else "Опоздание ❌"
         allowed = on_time if code in VALID else False
@@ -89,7 +149,7 @@ def upload():
             "allowed": allowed,
             "msg": msg,
             "record": record,
-            "file": f"/files/{filename}"
+            "file": f"/files/{filename}",
         }), 200
 
     else:  # GET
@@ -110,39 +170,106 @@ def upload():
         """
         return render_template_string(html_template, record=record, filename=filename)
 
+
 # --- Отдача файлов ---
 @app.route("/files/<filename>")
 def get_file(filename):
     return send_from_directory(SAVE_FOLDER, filename, as_attachment=True)
 
-# --- Список всех файлов ---
+
 @app.route("/files", methods=["GET"])
 def list_files():
-    files = os.listdir(SAVE_FOLDER)
-    return jsonify({"files": files})
+    return jsonify({"files": os.listdir(SAVE_FOLDER)})
 
-# --- Все сканы ---
+
+# --- Все сканы (живая таблица с SSE) ---
+ALL_SCANS_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Все сканы — live</title>
+<style>
+  body { font-family: monospace; background: #0f0f0f; color: #e0e0e0; padding: 20px; }
+  h2 { color: #7fff7f; }
+  table { border-collapse: collapse; width: 100%; }
+  th { background: #1a1a2e; color: #7fff7f; padding: 8px 12px; text-align: left; }
+  td { padding: 8px 12px; border-bottom: 1px solid #222; }
+  tr:hover td { background: #1a1a1a; }
+  .ok  { color: #7fff7f; }
+  .bad { color: #ff6b6b; }
+  #status { margin-bottom: 12px; font-size: 13px; color: #888; }
+  .new-row { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: #003300; } to { background: transparent; } }
+</style>
+</head>
+<body>
+<h2>📡 Все сканы (live)</h2>
+<div id="status">Подключаемся...</div>
+<table>
+  <thead><tr>
+    <th>Код</th><th>Пользователь</th><th>Устройство</th>
+    <th>Время (Ереван)</th><th>Статус</th>
+  </tr></thead>
+  <tbody id="tbody">
+    {% for r in records %}
+    <tr>
+      <td>{{ r.get('code','—') }}</td>
+      <td>{{ r.get('user_type','—') }}</td>
+      <td>{{ r.get('device','—') }}</td>
+      <td>{{ r.get('received_at','—') }}</td>
+      <td class="{{ 'ok' if r.get('on_time') else 'bad' }}">
+        {{ '✅ Вовремя' if r.get('on_time') else '❌ Опоздание' }}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<script>
+const tbody  = document.getElementById('tbody');
+const status = document.getElementById('status');
+
+function connect() {
+  const es = new EventSource('/events');
+
+  es.onopen = () => { status.textContent = '🟢 Подключено — обновляется автоматически'; };
+
+  es.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.event !== 'new_scan') return;
+    const r = msg.record;
+    const onTime = r.on_time;
+    const tr = document.createElement('tr');
+    tr.className = 'new-row';
+    tr.innerHTML = `
+      <td>${r.code || '—'}</td>
+      <td>${r.user_type || '—'}</td>
+      <td>${r.device || '—'}</td>
+      <td>${r.received_at || '—'}</td>
+      <td class="${onTime ? 'ok' : 'bad'}">${onTime ? '✅ Вовремя' : '❌ Опоздание'}</td>`;
+    tbody.insertBefore(tr, tbody.firstChild);
+  };
+
+  es.onerror = () => {
+    status.textContent = '🔴 Соединение потеряно, переподключаемся...';
+    es.close();
+    setTimeout(connect, 3000);
+  };
+}
+
+connect();
+</script>
+</body>
+</html>
+"""
+
 @app.route("/all_scans_view", methods=["GET"])
 def all_scans_view():
-    all_records = []
-    files = sorted(os.listdir(SAVE_FOLDER), reverse=True)
-    for file in files:
-        if file.endswith(".json"):
-            path = os.path.join(SAVE_FOLDER, file)
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                all_records.append(data)
+    records = load_all_records()
+    return render_template_string(ALL_SCANS_HTML, records=records)
 
-    html = "<h2>Все сканы</h2><table border='1'><tr><th>Код</th><th>Пользователь</th><th>Устройство</th><th>Время</th><th>Статус</th></tr>"
-    for r in all_records:
-        status = "✅" if r.get("on_time") else "❌"
-        html += f"<tr><td>{r.get('code')}</td><td>{r.get('user_type')}</td><td>{r.get('device')}</td><td>{r.get('received_at')}</td><td>{status}</td></tr>"
-    html += "</table>"
-    return html
 
-# --- Запуск сервера ---
+# --- Запуск ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
-
-
+    # threaded=True обязателен для SSE
+    app.run(host="0.0.0.0", port=port, debug=True, threaded=True)
